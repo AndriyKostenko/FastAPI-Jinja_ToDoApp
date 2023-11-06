@@ -3,7 +3,7 @@ sys.path.append("..")
 
 
 from starlette.responses import RedirectResponse
-from fastapi import Depends, HTTPException, status, APIRouter, Request, Response
+from fastapi import Depends, HTTPException, status, APIRouter, Request, Response, Form
 from pydantic import BaseModel
 from typing import Optional
 import models
@@ -99,13 +99,16 @@ def create_access_token(username: str, user_id: int,
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def get_current_user(token: str = Depends(oauth2_bearer)):
+async def get_current_user(request: Request):
     try:
+        token = request.cookies.get("access_token")
+        if token is None:
+            return None
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         user_id: int = payload.get("id")
         if username is None or user_id is None:
-            raise get_user_exception()
+            return None
         return {"username": username, "id": user_id}
     except JWTError:
         raise get_user_exception()
@@ -168,10 +171,51 @@ async def login(request: Request,
         return templates.TemplateResponse("login.html", {"request": request, "msg": msg})
 
 
+@router.get("/logout")
+async def logout(request: Request):
+    msg = "Logout Successful"
+    response = templates.TemplateResponse("login.html", {"request": request, "msg": msg})
+    response.delete_cookie(key="access_token")
+    return response
+
+
 @router.get("/register", response_class=HTMLResponse)
 async def register(request: Request):
     return templates.TemplateResponse("register.html", {"request":request})
 
+
+@router.post("/register", response_class=HTMLResponse)
+async def register_user(request: Request,
+                        email: str = Form(...),
+                        username: str = Form(...),
+                        firstname: str = Form(...),
+                        lastname: str = Form(...),
+                        password: str = Form(...),
+                        password2: str = Form(...),
+                        db: Session = Depends(get_db)):
+    
+    validation1 = db.query(models.Users).filter(models.Users.username == username).first()
+    validation2 = db.query(models.Users).filter(models.Users.email == email).first()
+    
+    if password != password2 or validation1 is not None or validation2 is not None:
+        msg = "Invalid registration request"
+        return templates.TemplateResponse("register.html", {"request": request, "msg": msg})
+    
+    user_model = models.Users()
+    user_model.username = username
+    user_model.email = email
+    user_model.first_name = firstname
+    user_model.last_name = lastname
+    user_model.hashed_password = get_password_hash(password)
+    user_model.is_active = True
+    
+    db.add(user_model)
+    db.commit()
+    
+    msg = "User successfully created"
+    return templates.TemplateResponse("login.html", {"request": request, "msg": msg})
+    
+      
 
 #Exceptions
 def get_user_exception():
